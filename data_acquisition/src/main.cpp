@@ -20,13 +20,29 @@ DHT dht(DHTPIN, DHTTYPE);
 
 // LDR
 #define LDR_PIN 39
+#define MOSFET_PIN 14
 
-// Capteurs machine de traction
+// Capteurs traction
 #define PRESSURE_PIN 35
 #define LVDT_PIN 34
 
 unsigned long lastPublish = 0;
-const long interval = 100;
+const long interval = 1000;
+
+// -------- FILTRE ADC --------
+
+int readADC(int pin){
+  int sum = 0;
+
+  for(int i=0;i<10;i++){
+    sum += analogRead(pin);
+    delay(2);
+  }
+
+  return sum / 10;
+}
+
+// -------- WIFI --------
 
 void setup_wifi() {
 
@@ -43,6 +59,8 @@ void setup_wifi() {
   Serial.println("WiFi connecté !");
 }
 
+// -------- MQTT --------
+
 void reconnect() {
 
   while (!client.connected()) {
@@ -52,6 +70,7 @@ void reconnect() {
     if (client.connect("ESP32Traction")) {
 
       Serial.println("connecté");
+      client.subscribe("machine/control");
 
     } else {
 
@@ -62,6 +81,8 @@ void reconnect() {
   }
 }
 
+// -------- LECTURE CAPTEURS --------
+
 void publishData() {
 
   Serial.println("");
@@ -70,16 +91,17 @@ void publishData() {
   float temperature = dht.readTemperature();
   float humidity = dht.readHumidity();
 
-  int ldrRaw = analogRead(LDR_PIN);
+  int ldrRaw = readADC(LDR_PIN);
   int ldrPercent = map(ldrRaw, 0, 4095, 0, 100);
 
-  int pressureRaw = analogRead(PRESSURE_PIN);
-  int lvdtRaw = analogRead(LVDT_PIN);
+  int pressureRaw = readADC(PRESSURE_PIN);
+  int lvdtRaw = readADC(LVDT_PIN);
 
-  float pressure_bar = map(pressureRaw, 0, 4095, 0, 10);
-  float lvdt_mm = map(lvdtRaw, 0, 4095, 0, 50);
+  // conversion capteurs
+  float pressure_bar = (pressureRaw / 4095.0) * 5.0;
+  float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
 
-  // PRINTS CAPTEURS
+  // -------- SERIAL --------
 
   Serial.print("Temperature : ");
   Serial.print(temperature);
@@ -112,7 +134,8 @@ void publishData() {
 
   Serial.println("============================");
 
-  // MQTT conversion
+  // -------- MQTT --------
+
   char tempStr[10];
   char humStr[10];
   char ldrStr[10];
@@ -126,8 +149,6 @@ void publishData() {
 
   itoa(ldrPercent, ldrStr, 10);
 
-  // MQTT publish
-
   client.publish("esp32/temp", tempStr);
   client.publish("esp32/hum", humStr);
   client.publish("esp32/LDR", ldrStr);
@@ -137,6 +158,31 @@ void publishData() {
   Serial.println("Données envoyées via MQTT !");
 }
 
+void callback(char* topic, byte* payload, unsigned int length) {
+
+  String message = "";
+
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  Serial.print("Message reçu : ");
+  Serial.println(message);
+
+  if (String(topic) == "machine/control") {
+
+    if (message == "start") {
+      digitalWrite(MOSFET_PIN, HIGH);
+    }
+
+    if (message == "stop") {
+      digitalWrite(MOSFET_PIN, LOW);
+    }
+  }
+}
+
+// -------- SETUP --------
+
 void setup() {
 
   Serial.begin(115200);
@@ -145,10 +191,20 @@ void setup() {
 
   dht.begin();
 
+  // configuration ADC ESP32
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
   setup_wifi();
 
   client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+
+  pinMode(MOSFET_PIN, OUTPUT);
+  digitalWrite(MOSFET_PIN, LOW); // machine OFF au début
 }
+
+// -------- LOOP --------
 
 void loop() {
 
