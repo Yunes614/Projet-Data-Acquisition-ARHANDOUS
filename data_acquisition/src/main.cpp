@@ -98,7 +98,7 @@ void publishData() {
   int lvdtRaw = readADC(LVDT_PIN);
 
   // conversion capteurs
-  float pressure_bar = (pressureRaw / 4095.0) * 5.0;
+  float pressure_bar = (pressureRaw / 4095.0) * 30.0;
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
 
   // -------- SERIAL --------
