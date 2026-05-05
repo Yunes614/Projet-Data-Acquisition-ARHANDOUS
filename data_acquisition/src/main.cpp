@@ -21,6 +21,15 @@ DHT dht(DHTPIN, DHTTYPE);
 // LDR
 #define LDR_PIN 39
 #define MOSFET_PIN 14
+#define LED_VERTE 15
+#define LED_ROUGE 2
+
+#define BUZZER_PIN 27
+#define LED_ALARME 12
+#define CHANNEL 0
+
+#define BTN_RESET 33
+
 
 // Capteurs traction
 #define PRESSURE_PIN 35
@@ -28,13 +37,15 @@ DHT dht(DHTPIN, DHTTYPE);
 
 unsigned long lastPublish = 0;
 const long interval = 1000;
+float previousPressure = 0;
+unsigned long dropTime = 0;
+bool dropDetected = false;
 
 // -------- FILTRE ADC --------
-
 int readADC(int pin){
   int sum = 0;
 
-  for(int i=0;i<10;i++){
+  for(int i = 0; i < 10; i++){
     sum += analogRead(pin);
     delay(2);
   }
@@ -43,7 +54,6 @@ int readADC(int pin){
 }
 
 // -------- WIFI --------
-
 void setup_wifi() {
 
   Serial.println("Connexion WiFi...");
@@ -59,11 +69,29 @@ void setup_wifi() {
   Serial.println("WiFi connecté !");
 }
 
-// -------- MQTT --------
+void updateLEDStatus(String state) {
 
+  if (state == "connected") {
+    digitalWrite(LED_VERTE, HIGH);
+    digitalWrite(LED_ROUGE, LOW);
+
+  } else if (state == "disconnected") {
+    digitalWrite(LED_VERTE, LOW);
+    digitalWrite(LED_ROUGE, HIGH);
+
+  } else if (state == "waiting") {
+    // clignotement optionnel ou les deux OFF
+    digitalWrite(LED_VERTE, LOW);
+    digitalWrite(LED_ROUGE, LOW);
+  }
+}
+
+// -------- MQTT --------
 void reconnect() {
 
   while (!client.connected()) {
+
+    updateLEDStatus("waiting");
 
     Serial.print("Connexion MQTT...");
 
@@ -72,17 +100,21 @@ void reconnect() {
       Serial.println("connecté");
       client.subscribe("machine/control");
 
+      updateLEDStatus("connected");
+
     } else {
 
       Serial.print("Erreur MQTT : ");
       Serial.println(client.state());
+
+      updateLEDStatus("disconnected");
+
       delay(2000);
     }
   }
 }
 
 // -------- LECTURE CAPTEURS --------
-
 void publishData() {
 
   Serial.println("");
@@ -98,11 +130,51 @@ void publishData() {
   int lvdtRaw = readADC(LVDT_PIN);
 
   // conversion capteurs
-  float pressure_bar = (pressureRaw / 4095.0) * 30.0;
+  float pressure_bar = ((pressureRaw / 4095.0) * 5.0) * 0.22;
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
+  Serial.print("Pressure actuelle : ");
+  Serial.println(pressure_bar);
+
+  Serial.print("Pressure precedente : ");
+  Serial.println(previousPressure);
+  if (pressure_bar < previousPressure && !dropDetected) {
+    dropTime = millis();
+    dropDetected = true;
+    Serial.println("↓↓↓↓ PRESSION EN DIMINUTION DETECTEE ↓↓↓↓");
+  }
+
+  previousPressure = pressure_bar;
+
+  static bool securite_active = false;
+
+
+  // -------- SECURITE LVDT  --------
+
+  if (lvdt_mm >= 50.0) {
+
+    Serial.println("!!! LIMITE LVDT ATTEINTE - ARRET MACHINE !!!");
+    digitalWrite(MOSFET_PIN, LOW);
+
+    for (int f = 800; f <= 2500; f += 20) {
+      ledcWriteTone(CHANNEL, f);
+      digitalWrite(LED_ALARME, HIGH);
+      delay(10);
+    }
+
+    for (int f = 2500; f >= 800; f -= 20) {
+      ledcWriteTone(CHANNEL, f);
+      digitalWrite(LED_ALARME, LOW);
+      delay(10);
+    }
+
+  } else {
+
+    ledcWriteTone(CHANNEL, 0);
+    digitalWrite(LED_ALARME, LOW);
+  }
+
 
   // -------- SERIAL --------
-
   Serial.print("Temperature : ");
   Serial.print(temperature);
   Serial.println(" °C");
@@ -135,17 +207,16 @@ void publishData() {
   Serial.println("============================");
 
   // -------- MQTT --------
-
   char tempStr[10];
   char humStr[10];
   char ldrStr[10];
   char pressureStr[10];
   char lvdtStr[10];
 
-  dtostrf(temperature,1,2,tempStr);
-  dtostrf(humidity,1,2,humStr);
-  dtostrf(pressure_bar,1,2,pressureStr);
-  dtostrf(lvdt_mm,1,2,lvdtStr);
+  dtostrf(temperature, 1, 2, tempStr);
+  dtostrf(humidity, 1, 2, humStr);
+  dtostrf(pressure_bar, 1, 2, pressureStr);
+  dtostrf(lvdt_mm, 1, 2, lvdtStr);
 
   itoa(ldrPercent, ldrStr, 10);
 
@@ -173,6 +244,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
     if (message == "start") {
       digitalWrite(MOSFET_PIN, HIGH);
+      dropDetected = false;
+      previousPressure = 0;
     }
 
     if (message == "stop") {
@@ -182,7 +255,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 // -------- SETUP --------
-
 void setup() {
 
   Serial.begin(115200);
@@ -200,13 +272,38 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
+  pinMode(LED_VERTE, OUTPUT);
+  pinMode(LED_ROUGE, OUTPUT);
+
+  // au démarrage → pas connecté
+  digitalWrite(LED_VERTE, LOW);
+  digitalWrite(LED_ROUGE, HIGH);
+
   pinMode(MOSFET_PIN, OUTPUT);
   digitalWrite(MOSFET_PIN, LOW); // machine OFF au début
+  pinMode(LED_ALARME, OUTPUT);
+
+  pinMode(BTN_RESET, INPUT_PULLUP);
+
+  ledcSetup(CHANNEL, 2000, 8);
+  ledcAttachPin(BUZZER_PIN, CHANNEL);
 }
 
 // -------- LOOP --------
-
 void loop() {
+
+  //  BYPASS TOTAL
+  if (digitalRead(BTN_RESET) == LOW) {
+
+    digitalWrite(MOSFET_PIN, HIGH);   // machine ON
+    ledcWriteTone(CHANNEL, 0);        // buzzer OFF
+    digitalWrite(LED_ALARME, LOW);    // LED OFF
+
+    dropDetected = false;
+    previousPressure = 0;
+
+    return; //  STOP TOUT
+  }
 
   if (!client.connected())
     reconnect();
@@ -214,6 +311,17 @@ void loop() {
   client.loop();
 
   unsigned long now = millis();
+
+  if (dropDetected) {
+    Serial.print("Attente arret... temps écoulé = ");
+    Serial.println(millis() - dropTime);
+  }
+
+  if (dropDetected && millis() - dropTime >= 2000) {
+    Serial.println("🔥🔥🔥 ARRET MACHINE 🔥🔥🔥");
+    digitalWrite(MOSFET_PIN, LOW);
+    dropDetected = false;
+  }
 
   if (now - lastPublish > interval) {
 
