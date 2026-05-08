@@ -1,6 +1,8 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <DHT.h>
+#include <Wire.h>
+#include <Adafruit_INA228.h>
 
 // WIFI
 const char* ssid = "DESKTOP-TRAC";
@@ -12,6 +14,9 @@ const int mqtt_port = 1883;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+// INA228
+Adafruit_INA228 ina228;
 
 // DHT22
 #define DHTPIN 26
@@ -30,20 +35,21 @@ DHT dht(DHTPIN, DHTTYPE);
 
 #define BTN_RESET 33
 
-
-// Capteurs traction
-#define PRESSURE_PIN 35
+// LVDT
 #define LVDT_PIN 34
 
 unsigned long lastPublish = 0;
 const long interval = 1000;
+
 float previousPressure = 0;
 unsigned long dropTime = 0;
 bool dropDetected = false;
+
 float lvdt_max = 0;
 
 // -------- FILTRE ADC --------
 int readADC(int pin){
+
   int sum = 0;
 
   for(int i = 0; i < 10; i++){
@@ -73,15 +79,19 @@ void setup_wifi() {
 void updateLEDStatus(String state) {
 
   if (state == "connected") {
+
     digitalWrite(LED_VERTE, HIGH);
     digitalWrite(LED_ROUGE, LOW);
 
-  } else if (state == "disconnected") {
+  }
+  else if (state == "disconnected") {
+
     digitalWrite(LED_VERTE, LOW);
     digitalWrite(LED_ROUGE, HIGH);
 
-  } else if (state == "waiting") {
-    // clignotement optionnel ou les deux OFF
+  }
+  else if (state == "waiting") {
+
     digitalWrite(LED_VERTE, LOW);
     digitalWrite(LED_ROUGE, LOW);
   }
@@ -99,6 +109,7 @@ void reconnect() {
     if (client.connect("ESP32Traction")) {
 
       Serial.println("connecté");
+
       client.subscribe("machine/control");
 
       updateLEDStatus("connected");
@@ -127,56 +138,68 @@ void publishData() {
   int ldrRaw = readADC(LDR_PIN);
   int ldrPercent = map(ldrRaw, 0, 4095, 0, 100);
 
-  int pressureRaw = readADC(PRESSURE_PIN);
+  // -------- PRESSION VIA INA228 --------
+  float tension = ina228.readBusVoltage();
+
+  // Garde la même variable MQTT
+  float pressure_bar = ((tension / 10.0) * 300.0) + 0.505;
+
+  // -------- LVDT --------
   int lvdtRaw = readADC(LVDT_PIN);
 
-  // conversion capteurs
-  float pressure_bar = (pressureRaw / 4095.0) * 300;
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
+
   if (lvdt_mm > lvdt_max) {
     lvdt_max = lvdt_mm;
   }
+
   Serial.print("Pressure actuelle : ");
   Serial.println(pressure_bar);
 
   Serial.print("Pressure precedente : ");
   Serial.println(previousPressure);
-  if (pressure_bar < previousPressure && !dropDetected) {
+
+  if (pressure_bar < (previousPressure - 10) && !dropDetected) {
+
     dropTime = millis();
     dropDetected = true;
+
     Serial.println("↓↓↓↓ PRESSION EN DIMINUTION DETECTEE ↓↓↓↓");
   }
 
   previousPressure = pressure_bar;
 
-  static bool securite_active = false;
-
-
-  // -------- SECURITE LVDT  --------
-
+  // -------- SECURITE LVDT --------
   if (lvdt_mm >= 50.0) {
 
     Serial.println("!!! LIMITE LVDT ATTEINTE - ARRET MACHINE !!!");
+
     digitalWrite(MOSFET_PIN, LOW);
 
     for (int f = 800; f <= 2500; f += 20) {
+
       ledcWriteTone(CHANNEL, f);
+
       digitalWrite(LED_ALARME, HIGH);
+
       delay(10);
     }
 
     for (int f = 2500; f >= 800; f -= 20) {
+
       ledcWriteTone(CHANNEL, f);
+
       digitalWrite(LED_ALARME, LOW);
+
       delay(10);
     }
 
   } else {
 
     ledcWriteTone(CHANNEL, 0);
+
     digitalWrite(LED_ALARME, LOW);
   }
-
 
   // -------- SERIAL --------
   Serial.print("Temperature : ");
@@ -194,8 +217,9 @@ void publishData() {
   Serial.print(ldrPercent);
   Serial.println(" %");
 
-  Serial.print("Pressure raw : ");
-  Serial.println(pressureRaw);
+  Serial.print("Tension INA228 : ");
+  Serial.print(tension);
+  Serial.println(" V");
 
   Serial.print("Pressure bar : ");
   Serial.print(pressure_bar);
@@ -227,7 +251,10 @@ void publishData() {
   client.publish("esp32/temp", tempStr);
   client.publish("esp32/hum", humStr);
   client.publish("esp32/LDR", ldrStr);
+
+  // MEME TOPIC MQTT
   client.publish("esp32/pressure", pressureStr);
+
   client.publish("esp32/lvdt", lvdtStr);
 
   Serial.println("Données envoyées via MQTT !");
@@ -247,13 +274,18 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (String(topic) == "machine/control") {
 
     if (message == "start") {
+
       digitalWrite(MOSFET_PIN, HIGH);
+
       dropDetected = false;
+
       previousPressure = 0;
-      lvdt_max = 0; 
+
+      lvdt_max = 0;
     }
 
     if (message == "stop") {
+
       digitalWrite(MOSFET_PIN, LOW);
     }
   }
@@ -268,6 +300,18 @@ void setup() {
 
   dht.begin();
 
+  // I2C INA228
+  Wire.begin(21, 22);
+
+  if (!ina228.begin()) {
+
+    Serial.println("INA228 non detecte");
+
+    while (1);
+  }
+
+  Serial.println("INA228 detecte !");
+
   // configuration ADC ESP32
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
@@ -280,12 +324,12 @@ void setup() {
   pinMode(LED_VERTE, OUTPUT);
   pinMode(LED_ROUGE, OUTPUT);
 
-  // au démarrage → pas connecté
   digitalWrite(LED_VERTE, LOW);
   digitalWrite(LED_ROUGE, HIGH);
 
   pinMode(MOSFET_PIN, OUTPUT);
-  digitalWrite(MOSFET_PIN, LOW); // machine OFF au début
+  digitalWrite(MOSFET_PIN, LOW);
+
   pinMode(LED_ALARME, OUTPUT);
 
   pinMode(BTN_RESET, INPUT_PULLUP);
@@ -297,17 +341,20 @@ void setup() {
 // -------- LOOP --------
 void loop() {
 
-  //  BYPASS TOTAL
+  // BYPASS TOTAL
   if (digitalRead(BTN_RESET) == LOW) {
 
-    digitalWrite(MOSFET_PIN, HIGH);   // machine ON
-    ledcWriteTone(CHANNEL, 0);        // buzzer OFF
-    digitalWrite(LED_ALARME, LOW);    // LED OFF
+    digitalWrite(MOSFET_PIN, HIGH);
+
+    ledcWriteTone(CHANNEL, 0);
+
+    digitalWrite(LED_ALARME, LOW);
 
     dropDetected = false;
+
     previousPressure = 0;
 
-    return; //  STOP TOUT
+    return;
   }
 
   if (!client.connected())
@@ -318,13 +365,17 @@ void loop() {
   unsigned long now = millis();
 
   if (dropDetected) {
+
     Serial.print("Attente arret... temps écoulé = ");
     Serial.println(millis() - dropTime);
   }
 
   if (dropDetected && millis() - dropTime >= 2000) {
+
     Serial.println("🔥🔥🔥 ARRET MACHINE 🔥🔥🔥");
+
     digitalWrite(MOSFET_PIN, LOW);
+
     dropDetected = false;
   }
 
