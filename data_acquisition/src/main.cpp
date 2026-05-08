@@ -40,6 +40,7 @@ const long interval = 1000;
 float previousPressure = 0;
 unsigned long dropTime = 0;
 bool dropDetected = false;
+float lvdt_max = 0;
 
 // -------- FILTRE ADC --------
 int readADC(int pin){
@@ -130,8 +131,11 @@ void publishData() {
   int lvdtRaw = readADC(LVDT_PIN);
 
   // conversion capteurs
-  float pressure_bar = ((pressureRaw / 4095.0) * 5.0) * 0.22;
+  float pressure_bar = (pressureRaw / 4095.0) * 300;
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
+  if (lvdt_mm > lvdt_max) {
+    lvdt_max = lvdt_mm;
+  }
   Serial.print("Pressure actuelle : ");
   Serial.println(pressure_bar);
 
@@ -216,7 +220,7 @@ void publishData() {
   dtostrf(temperature, 1, 2, tempStr);
   dtostrf(humidity, 1, 2, humStr);
   dtostrf(pressure_bar, 1, 2, pressureStr);
-  dtostrf(lvdt_mm, 1, 2, lvdtStr);
+  dtostrf(lvdt_max, 1, 2, lvdtStr);
 
   itoa(ldrPercent, ldrStr, 10);
 
@@ -246,6 +250,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
       digitalWrite(MOSFET_PIN, HIGH);
       dropDetected = false;
       previousPressure = 0;
+      lvdt_max = 0; 
     }
 
     if (message == "stop") {
