@@ -3,6 +3,8 @@
 #include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_INA228.h>
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
 
 // WIFI
 const char* ssid = "DESKTOP-TRAC";
@@ -17,6 +19,9 @@ PubSubClient client(espClient);
 
 // INA228
 Adafruit_INA228 ina228;
+
+// LCD I2C
+hd44780_I2Cexp lcd(0x27);
 
 // DHT22
 #define DHTPIN 26
@@ -148,6 +153,29 @@ void publishData() {
   int lvdtRaw = readADC(LVDT_PIN);
 
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
+  // ===== LCD =====
+
+  // Ligne 1
+  lcd.setCursor(0,0);
+
+  lcd.print("T:");
+  lcd.print(temperature,1);
+
+  lcd.print(" H:");
+  lcd.print(humidity,0);
+
+  lcd.print("   ");
+
+  // Ligne 2
+  lcd.setCursor(0,1);
+
+  lcd.print("P:");
+  lcd.print(pressure_bar,0);
+
+  lcd.print(" L:");
+  lcd.print(lvdt_mm,1);
+
+  lcd.print("   ");
 
   if (lvdt_mm > lvdt_max) {
     lvdt_max = lvdt_mm;
@@ -300,17 +328,38 @@ void setup() {
 
   dht.begin();
 
-  // I2C INA228
+  // I2C
   Wire.begin(21, 22);
 
+  // ===== LCD =====
+  lcd.begin(16,2);
+
+  lcd.setCursor(0,0);
+  lcd.print("SYSTEM READY");
+
+  delay(2000);
+
+  lcd.clear();
+
+  // ===== INA228 =====
   if (!ina228.begin()) {
 
     Serial.println("INA228 non detecte");
+
+    lcd.setCursor(0,0);
+    lcd.print("INA228 ERROR");
 
     while (1);
   }
 
   Serial.println("INA228 detecte !");
+
+  lcd.setCursor(0,0);
+  lcd.print("INA228 OK");
+
+  delay(1000);
+
+  lcd.clear();
 
   // configuration ADC ESP32
   analogReadResolution(12);
