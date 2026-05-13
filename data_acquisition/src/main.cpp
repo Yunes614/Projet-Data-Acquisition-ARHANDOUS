@@ -44,13 +44,16 @@ DHT dht(DHTPIN, DHTTYPE);
 #define LVDT_PIN 34
 
 unsigned long lastPublish = 0;
-const long interval = 1000;
+const long interval = 100;
 
 float previousPressure = 0;
 unsigned long dropTime = 0;
 bool dropDetected = false;
 
 float lvdt_max = 0;
+float lastLvdtPos = 0;
+unsigned long lastLvdtTime = 0;
+float lvdt_speed = 0;
 
 // -------- FILTRE ADC --------
 int readADC(int pin){
@@ -153,6 +156,26 @@ void publishData() {
   int lvdtRaw = readADC(LVDT_PIN);
 
   float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
+  unsigned long nowLvdt = millis();
+
+  if (lastLvdtTime == 0) {
+    lastLvdtPos = lvdt_mm;
+    lastLvdtTime = nowLvdt;
+    lvdt_speed = 0;
+  }
+  else if (nowLvdt - lastLvdtTime >= 5000) {
+    float dt_min = (nowLvdt - lastLvdtTime) / 60000.0;
+    float dx = lvdt_mm - lastLvdtPos;
+
+    if (abs(dx) < 0.05) {
+      lvdt_speed = 0;
+    } else {
+      lvdt_speed = abs(dx / dt_min);
+    }
+
+    lastLvdtPos = lvdt_mm;
+    lastLvdtTime = nowLvdt;
+  }
   // ===== LCD =====
 
   // Ligne 1
@@ -268,11 +291,13 @@ void publishData() {
   char ldrStr[10];
   char pressureStr[10];
   char lvdtStr[10];
+  char speedStr[10];
 
   dtostrf(temperature, 1, 2, tempStr);
   dtostrf(humidity, 1, 2, humStr);
   dtostrf(pressure_bar, 1, 2, pressureStr);
   dtostrf(lvdt_max, 1, 2, lvdtStr);
+  dtostrf(lvdt_speed, 1, 2, speedStr);
 
   itoa(ldrPercent, ldrStr, 10);
 
@@ -284,6 +309,8 @@ void publishData() {
   client.publish("esp32/pressure", pressureStr);
 
   client.publish("esp32/lvdt", lvdtStr);
+
+  client.publish("esp32/speed", speedStr);
 
   Serial.println("Données envoyées via MQTT !");
 }
@@ -307,7 +334,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
       dropDetected = false;
 
-      previousPressure = 0;
+      previousPressure = -1;
 
       lvdt_max = 0;
     }
