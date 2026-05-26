@@ -41,10 +41,10 @@ DHT dht(DHTPIN, DHTTYPE);
 #define BTN_RESET 33
 
 // LVDT
-#define LVDT_PIN 34
+#define LVDT_PIN 35
 
 unsigned long lastPublish = 0;
-const long interval = 100;
+const long interval = 300;
 
 float previousPressure = 0;
 unsigned long dropTime = 0;
