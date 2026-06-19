@@ -1,314 +1,359 @@
-#include <WiFi.h>
-#include <PubSubClient.h>
-#include <DHT.h>
-<<<<<<< HEAD
-#include <Update.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_NeoPixel.h>
+#include <WiFi.h>                         // Bibliothèque pour connecter l'ESP32 au Wi-Fi
+#include <PubSubClient.h>                 // Bibliothèque pour la communication MQTT
+#include <DHT.h>                          // Bibliothèque pour le capteur DHT22
+#include <Wire.h>                         // Bibliothèque pour la communication I2C
+#include <Adafruit_INA228.h>              // Bibliothèque pour le module INA228
+#include <hd44780.h>                      // Bibliothèque pour l'écran LCD
+#include <hd44780ioClass/hd44780_I2Cexp.h>// Bibliothèque pour LCD avec module I2C
 
-// DHT Sensor Configuration
-#define DHTPIN 26      // Pin connecté au DHT11
-#define DHTTYPE DHT22  // Type de capteur DHT
-DHT dht(DHTPIN, DHTTYPE);
 
-// LDR Configuration
-#define LDR_PIN 39     // Pin connectée au capteur LDR
+// =====================================================
+// PARAMETRES WIFI
+// =====================================================
 
-int ldrValue = 0;     // Valeur brute de l'ADC
-int ldrPercent = 0;   // Valeur LDR mappée entre 0 et 100
-int ldrCalibratedValue = 0;
-int ldrMin = 4095; // Valeur minimale calibrée
-int ldrMax = 0;    // Valeur maximale calibrée
+const char* ssid = "DESKTOP-TRAC";        // Nom du réseau Wi-Fi
+const char* password = "51k85,D9";        // Mot de passe du réseau Wi-Fi
 
-int currentSpeed = 128; // Vitesse actuelle du moteur (0-255), 50% par défaut
 
-unsigned long lastSpeedUpdate = 0; // Temps du dernier ajustement
-const int speedStep = 5; // Pas pour lisser la transition
-const unsigned long speedUpdateInterval = 50; // Intervalle pour le contrôle fluide
+// =====================================================
+// PARAMETRES MQTT
+// =====================================================
 
-// OLED Configuration
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET    -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+const char* mqtt_server = "192.168.137.1"; // Adresse IP du broker MQTT Mosquitto
+const int mqtt_port = 1883;                // Port MQTT standard
 
-// WiFi Information
-const char* ssid = "ARHANDOUS";
-const char* password = "123456789";
+WiFiClient espClient;                      // Client Wi-Fi utilisé par MQTT
+PubSubClient client(espClient);            // Client MQTT basé sur la connexion Wi-Fi
 
-// MQTT Broker Information
-const char* mqtt_server = "10.41.5.143"; // IP de Mosquitto
-const int mqtt_port = 1883;
-WiFiClient espClient;
-PubSubClient client(espClient);
 
-// Neopixel Configuration
-#define NEOPIXEL_PIN_1 15
-#define NUM_PIXELS_1 8 // Nombre de LEDs dans la bande
-Adafruit_NeoPixel pixels_1(NUM_PIXELS_1, NEOPIXEL_PIN_1, NEO_GRB + NEO_KHZ800);
+// =====================================================
+// MODULE INA228
+// =====================================================
+// L'INA228 lit la tension provenant du transmetteur
+// de la cellule de charge. Cette tension est ensuite
+// convertie en charge en kilogrammes.
 
-#define NEOPIXEL_PIN_2 14
-#define NUM_PIXELS_2 8 // Nombre de LEDs dans la bande
-Adafruit_NeoPixel pixels_2(NUM_PIXELS_2, NEOPIXEL_PIN_2, NEO_GRB + NEO_KHZ800);
-
-#define NEOPIXEL_PIN_3 13
-#define NUM_PIXELS_3 8 // Bande pour l'état MQTT
-Adafruit_NeoPixel pixels_3(NUM_PIXELS_3, NEOPIXEL_PIN_3, NEO_GRB + NEO_KHZ800);
-=======
-#include <Wire.h>
-#include <Adafruit_INA228.h>
-#include <hd44780.h>
-#include <hd44780ioClass/hd44780_I2Cexp.h>
-
-// WIFI
-const char* ssid = "DESKTOP-TRAC";
-const char* password = "51k85,D9";
-
-// MQTT
-const char* mqtt_server = "192.168.137.1";
-const int mqtt_port = 1883;
-
-WiFiClient espClient;
-PubSubClient client(espClient);
-
-// INA228
 Adafruit_INA228 ina228;
 
-// LCD I2C
-hd44780_I2Cexp lcd(0x27);
 
-// DHT22
-#define DHTPIN 26
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+// =====================================================
+// ECRAN LCD I2C
+// =====================================================
+// Le LCD affiche localement les principales mesures :
+// température, humidité, charge et déplacement.
 
-// LDR
-#define LDR_PIN 39
-#define MOSFET_PIN 14
-#define LED_VERTE 15
-#define LED_ROUGE 2
+hd44780_I2Cexp lcd(0x27);                  // Adresse I2C du LCD
 
-#define BUZZER_PIN 27
-#define LED_ALARME 12
-#define CHANNEL 0
 
-#define BTN_RESET 33
+// =====================================================
+// CAPTEUR DHT22
+// =====================================================
+// Le DHT22 mesure la température et l'humidité ambiantes.
 
-// LVDT
-#define LVDT_PIN 35
+#define DHTPIN 26                          // Broche utilisée pour le DHT22
+#define DHTTYPE DHT22                      // Type du capteur
+DHT dht(DHTPIN, DHTTYPE);                  // Création de l'objet DHT
 
-unsigned long lastPublish = 0;
-const long interval = 300;
 
-float previousPressure = 0;
-unsigned long dropTime = 0;
-bool dropDetected = false;
+// =====================================================
+// BROCHES DE COMMANDE ET SIGNALISATION
+// =====================================================
 
-float lvdt_max = 0;
-float lastLvdtPos = 0;
-unsigned long lastLvdtTime = 0;
-float lvdt_speed = 0;
+#define MOSFET_PIN 14                      // Broche qui commande le MOSFET/relais
+#define LED_VERTE 15                       // LED verte : connexion MQTT OK
+#define LED_ROUGE 2                        // LED rouge : défaut de connexion MQTT
+#define BUZZER_PIN 27                      // Buzzer d'alarme
+#define LED_ALARME 12                      // LED d'alarme LVDT
+#define CHANNEL 0                          // Canal PWM utilisé pour le buzzer
+#define BTN_RESET 33                       // Bouton bypass/reset manuel
 
-// -------- FILTRE ADC --------
-int readADC(int pin){
 
-  int sum = 0;
+// =====================================================
+// CAPTEUR DE DEPLACEMENT LVDT
+// =====================================================
+// Le LVDT mesure le déplacement de la traverse.
+// La valeur brute ADC est convertie en millimètres.
 
-  for(int i = 0; i < 10; i++){
-    sum += analogRead(pin);
-    delay(2);
+#define LVDT_PIN 35                        // Entrée analogique du LVDT
+
+
+// =====================================================
+// VARIABLES DE TEMPS
+// =====================================================
+
+unsigned long lastPublish = 0;             // Dernier moment où les données ont été envoyées
+const long interval = 300;                 // Intervalle d'envoi MQTT en millisecondes
+
+
+// =====================================================
+// VARIABLES DE SECURITE
+// =====================================================
+// previousPressure sert à détecter une chute brutale
+// de charge, par exemple lors de la rupture de l'éprouvette.
+
+float previousPressure = 0;                // Ancienne valeur de charge en kg
+unsigned long dropTime = 0;                // Moment où la chute de charge est détectée
+bool dropDetected = false;                 // Indique si une chute de charge est détectée
+
+
+// =====================================================
+// VARIABLE LVDT
+// =====================================================
+
+float lvdt_max = 0;                        // Déplacement maximal atteint pendant l'essai
+
+
+// =====================================================
+// FONCTION DE LECTURE ADC AVEC MOYENNE
+// =====================================================
+// Cette fonction lit 10 fois une entrée analogique,
+// puis fait la moyenne pour réduire le bruit de mesure.
+
+int readADC(int pin) {
+
+  int sum = 0;                             // Variable qui stocke la somme des lectures
+
+  for (int i = 0; i < 10; i++) {           // Répéter 10 mesures
+    sum += analogRead(pin);                // Ajouter la valeur lue à la somme
+    delay(2);                              // Petite pause entre deux lectures
   }
 
-  return sum / 10;
+  return sum / 10;                         // Retourner la moyenne des 10 mesures
 }
 
-// -------- WIFI --------
+
+// =====================================================
+// CONNEXION WIFI
+// =====================================================
+// Cette fonction connecte l'ESP32 au réseau Wi-Fi.
+
 void setup_wifi() {
 
-  Serial.println("Connexion WiFi...");
+  Serial.println("Connexion WiFi...");     // Message dans le moniteur série
 
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid, password);              // Lancement de la connexion Wi-Fi
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  while (WiFi.status() != WL_CONNECTED) {  // Tant que l'ESP32 n'est pas connecté
+    delay(500);                            // Attendre 0,5 seconde
+    Serial.print(".");                     // Afficher un point d'attente
   }
 
-  Serial.println("");
-  Serial.println("WiFi connecté !");
+  Serial.println("");                      // Saut de ligne
+  Serial.println("WiFi connecté !");       // Confirmation de connexion
 }
+
+
+// =====================================================
+// GESTION DES LEDS DE CONNEXION
+// =====================================================
+// LED verte : MQTT connecté.
+// LED rouge : MQTT déconnecté.
+// LEDs éteintes : tentative de connexion.
 
 void updateLEDStatus(String state) {
 
-  if (state == "connected") {
+  if (state == "connected") {              // Si MQTT est connecté
 
-    digitalWrite(LED_VERTE, HIGH);
-    digitalWrite(LED_ROUGE, LOW);
-
-  }
-  else if (state == "disconnected") {
-
-    digitalWrite(LED_VERTE, LOW);
-    digitalWrite(LED_ROUGE, HIGH);
+    digitalWrite(LED_VERTE, HIGH);         // Allumer LED verte
+    digitalWrite(LED_ROUGE, LOW);          // Éteindre LED rouge
 
   }
-  else if (state == "waiting") {
+  else if (state == "disconnected") {      // Si MQTT est déconnecté
 
-    digitalWrite(LED_VERTE, LOW);
-    digitalWrite(LED_ROUGE, LOW);
+    digitalWrite(LED_VERTE, LOW);          // Éteindre LED verte
+    digitalWrite(LED_ROUGE, HIGH);         // Allumer LED rouge
+
+  }
+  else if (state == "waiting") {           // Pendant une tentative de connexion
+
+    digitalWrite(LED_VERTE, LOW);          // Éteindre LED verte
+    digitalWrite(LED_ROUGE, LOW);          // Éteindre LED rouge
   }
 }
 
-// -------- MQTT --------
+
+// =====================================================
+// RECONNEXION MQTT
+// =====================================================
+// Cette fonction reconnecte automatiquement l'ESP32
+// au broker MQTT si la connexion est perdue.
+
 void reconnect() {
 
-  while (!client.connected()) {
+  while (!client.connected()) {            // Tant que le client MQTT n'est pas connecté
 
-    updateLEDStatus("waiting");
+    updateLEDStatus("waiting");            // État attente
 
-    Serial.print("Connexion MQTT...");
+    Serial.print("Connexion MQTT...");     // Message de tentative
 
-    if (client.connect("ESP32Traction")) {
+    if (client.connect("ESP32Traction")) { // Tentative de connexion au broker
 
-      Serial.println("connecté");
+      Serial.println("connecté");          // Connexion réussie
 
-      client.subscribe("machine/control");
+      client.subscribe("machine/control"); // Abonnement au topic de commande Start/Stop
 
-      updateLEDStatus("connected");
+      updateLEDStatus("connected");        // LED verte allumée
 
-    } else {
+    } else {                               // Si la connexion échoue
 
-      Serial.print("Erreur MQTT : ");
-      Serial.println(client.state());
+      Serial.print("Erreur MQTT : ");      // Afficher l'erreur
+      Serial.println(client.state());      // Code d'erreur MQTT
 
-      updateLEDStatus("disconnected");
+      updateLEDStatus("disconnected");     // LED rouge allumée
 
-      delay(2000);
+      delay(2000);                         // Attendre avant de réessayer
     }
   }
 }
 
-// -------- LECTURE CAPTEURS --------
+
+// =====================================================
+// LECTURE DES CAPTEURS ET ENVOI DES DONNEES
+// =====================================================
+// Cette fonction lit les capteurs, convertit les valeurs,
+// affiche les mesures sur LCD et les envoie vers Node-RED.
+
 void publishData() {
 
   Serial.println("");
   Serial.println("===== LECTURE CAPTEURS =====");
 
-  float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
 
-  int ldrRaw = readADC(LDR_PIN);
-  int ldrPercent = map(ldrRaw, 0, 4095, 0, 100);
+  // =====================================================
+  // LECTURE TEMPERATURE ET HUMIDITE
+  // =====================================================
 
-  // -------- PRESSION VIA INA228 --------
-  float tension = ina228.readBusVoltage();
+  float temperature = dht.readTemperature(); // Lecture de la température en °C
+  float humidity = dht.readHumidity();       // Lecture de l'humidité en %
 
-  // Garde la même variable MQTT
-  float pressure_bar = ((tension / 10.0) * 300.0) + 0.505;
 
-  // -------- LVDT --------
-  int lvdtRaw = readADC(LVDT_PIN);
+  // =====================================================
+  // LECTURE CELLULE DE CHARGE VIA INA228
+  // =====================================================
+  // Le transmetteur de la cellule de charge fournit une
+  // tension proportionnelle à la charge appliquée.
+  // Ici, 10 V correspond à 300 kg.
 
-  float lvdt_mm = (lvdtRaw / 4095.0) * 50.0;
-  unsigned long nowLvdt = millis();
+  float tension = ina228.readBusVoltage();   // Lecture de la tension par l'INA228
 
-  if (lastLvdtTime == 0) {
-    lastLvdtPos = lvdt_mm;
-    lastLvdtTime = nowLvdt;
-    lvdt_speed = 0;
+  float pressure_kg = ((tension / 10.0) * 300.0) + 0.505;
+  // Conversion tension -> charge en kg
+  // 0 V = 0 kg
+  // 10 V = 300 kg
+  // +0.505 = correction/calibration
+
+
+  // =====================================================
+  // LECTURE DU LVDT
+  // =====================================================
+  // Le LVDT mesure le déplacement. La valeur ADC varie
+  // de 0 à 4095 et correspond à une course de 0 à 50 mm.
+
+  int lvdtRaw = readADC(LVDT_PIN);           // Lecture brute ADC du LVDT
+
+  float lvdt_mm = (lvdtRaw / 4095.0) * 50.0; // Conversion ADC -> déplacement en mm
+
+
+  // =====================================================
+  // AFFICHAGE LCD
+  // =====================================================
+
+  lcd.setCursor(0, 0);                       // Curseur ligne 1, colonne 0
+
+  lcd.print("T:");                           // Afficher T pour température
+  lcd.print(temperature, 1);                 // Afficher température avec 1 décimale
+
+  lcd.print(" H:");                          // Afficher H pour humidité
+  lcd.print(humidity, 0);                    // Afficher humidité sans décimale
+
+  lcd.print("   ");                          // Effacer les anciens caractères restants
+
+
+  lcd.setCursor(0, 1);                       // Curseur ligne 2, colonne 0
+
+  lcd.print("Kg:");                          // Afficher la charge en kg
+  lcd.print(pressure_kg, 0);                 // Afficher la charge sans décimale
+
+  lcd.print(" L:");                          // Afficher L pour LVDT
+  lcd.print(lvdt_mm, 1);                     // Afficher déplacement avec 1 décimale
+
+  lcd.print("   ");                          // Effacer les anciens caractères restants
+
+
+  // =====================================================
+  // MEMORISATION DU DEPLACEMENT MAXIMAL
+  // =====================================================
+
+  if (lvdt_mm > lvdt_max) {                  // Si la valeur actuelle dépasse l'ancien maximum
+    lvdt_max = lvdt_mm;                      // Mettre à jour le maximum
   }
-  else if (nowLvdt - lastLvdtTime >= 5000) {
-    float dt_min = (nowLvdt - lastLvdtTime) / 60000.0;
-    float dx = lvdt_mm - lastLvdtPos;
 
-    if (abs(dx) < 0.05) {
-      lvdt_speed = 0;
-    } else {
-      lvdt_speed = abs(dx / dt_min);
-    }
 
-    lastLvdtPos = lvdt_mm;
-    lastLvdtTime = nowLvdt;
-  }
-  // ===== LCD =====
+  // =====================================================
+  // DETECTION CHUTE BRUTALE DE CHARGE
+  // =====================================================
+  // Si la charge diminue brutalement de plus de 10 kg,
+  // cela peut indiquer la rupture de l'éprouvette.
 
-  // Ligne 1
-  lcd.setCursor(0,0);
+  Serial.print("Charge actuelle : ");
+  Serial.println(pressure_kg);
 
-  lcd.print("T:");
-  lcd.print(temperature,1);
-
-  lcd.print(" H:");
-  lcd.print(humidity,0);
-
-  lcd.print("   ");
-
-  // Ligne 2
-  lcd.setCursor(0,1);
-
-  lcd.print("P:");
-  lcd.print(pressure_bar,0);
-
-  lcd.print(" L:");
-  lcd.print(lvdt_mm,1);
-
-  lcd.print("   ");
-
-  if (lvdt_mm > lvdt_max) {
-    lvdt_max = lvdt_mm;
-  }
-
-  Serial.print("Pressure actuelle : ");
-  Serial.println(pressure_bar);
-
-  Serial.print("Pressure precedente : ");
+  Serial.print("Charge precedente : ");
   Serial.println(previousPressure);
 
-  if (pressure_bar < (previousPressure - 10) && !dropDetected) {
+  if (pressure_kg < (previousPressure - 10) && !dropDetected) {
 
-    dropTime = millis();
-    dropDetected = true;
+    dropTime = millis();                     // Enregistrer le temps de détection
+    dropDetected = true;                     // Activer le drapeau de chute
 
-    Serial.println("↓↓↓↓ PRESSION EN DIMINUTION DETECTEE ↓↓↓↓");
+    Serial.println("↓↓↓↓ CHUTE DE CHARGE DETECTEE ↓↓↓↓");
   }
 
-  previousPressure = pressure_bar;
+  previousPressure = pressure_kg;            // Mettre à jour l'ancienne valeur
 
-  // -------- SECURITE LVDT --------
-  if (lvdt_mm >= 50.0) {
+
+  // =====================================================
+  // SECURITE LVDT
+  // =====================================================
+  // Si le déplacement atteint 50 mm, la machine s'arrête
+  // et une alarme sonore/visuelle est activée.
+
+  if (lvdt_mm >= 50.0) {                     // Seuil maximal du LVDT
 
     Serial.println("!!! LIMITE LVDT ATTEINTE - ARRET MACHINE !!!");
 
-    digitalWrite(MOSFET_PIN, LOW);
+    digitalWrite(MOSFET_PIN, LOW);           // Arrêt de la machine
 
-    for (int f = 800; f <= 2500; f += 20) {
+    for (int f = 800; f <= 2500; f += 20) {  // Son montant du buzzer
 
-      ledcWriteTone(CHANNEL, f);
+      ledcWriteTone(CHANNEL, f);             // Envoyer une fréquence au buzzer
 
-      digitalWrite(LED_ALARME, HIGH);
+      digitalWrite(LED_ALARME, HIGH);        // Allumer LED alarme
 
-      delay(10);
+      delay(10);                             // Petite pause
     }
 
-    for (int f = 2500; f >= 800; f -= 20) {
+    for (int f = 2500; f >= 800; f -= 20) {  // Son descendant du buzzer
 
-      ledcWriteTone(CHANNEL, f);
+      ledcWriteTone(CHANNEL, f);             // Modifier fréquence buzzer
 
-      digitalWrite(LED_ALARME, LOW);
+      digitalWrite(LED_ALARME, LOW);         // Éteindre LED alarme
 
-      delay(10);
+      delay(10);                             // Petite pause
     }
 
-  } else {
+  } else {                                   // Si la limite n'est pas atteinte
 
-    ledcWriteTone(CHANNEL, 0);
+    ledcWriteTone(CHANNEL, 0);               // Arrêter le buzzer
 
-    digitalWrite(LED_ALARME, LOW);
+    digitalWrite(LED_ALARME, LOW);           // Éteindre LED alarme
   }
 
-  // -------- SERIAL --------
+
+  // =====================================================
+  // AFFICHAGE MONITEUR SERIE
+  // =====================================================
+
   Serial.print("Temperature : ");
   Serial.print(temperature);
   Serial.println(" °C");
@@ -317,20 +362,13 @@ void publishData() {
   Serial.print(humidity);
   Serial.println(" %");
 
-  Serial.print("LDR brut : ");
-  Serial.println(ldrRaw);
-
-  Serial.print("LDR % : ");
-  Serial.print(ldrPercent);
-  Serial.println(" %");
-
   Serial.print("Tension INA228 : ");
   Serial.print(tension);
   Serial.println(" V");
 
-  Serial.print("Pressure bar : ");
-  Serial.print(pressure_bar);
-  Serial.println(" bar");
+  Serial.print("Charge cellule : ");
+  Serial.print(pressure_kg);
+  Serial.println(" kg");
 
   Serial.print("LVDT raw : ");
   Serial.println(lvdtRaw);
@@ -339,553 +377,255 @@ void publishData() {
   Serial.print(lvdt_mm);
   Serial.println(" mm");
 
+  Serial.print("LVDT max : ");
+  Serial.print(lvdt_max);
+  Serial.println(" mm");
+
   Serial.println("============================");
 
-  // -------- MQTT --------
-  char tempStr[10];
-  char humStr[10];
-  char ldrStr[10];
-  char pressureStr[10];
-  char lvdtStr[10];
-  char speedStr[10];
 
-  dtostrf(temperature, 1, 2, tempStr);
-  dtostrf(humidity, 1, 2, humStr);
-  dtostrf(pressure_bar, 1, 2, pressureStr);
-  dtostrf(lvdt_max, 1, 2, lvdtStr);
-  dtostrf(lvdt_speed, 1, 2, speedStr);
+  // =====================================================
+  // PREPARATION DES DONNEES MQTT
+  // =====================================================
+  // MQTT envoie des chaînes de caractères.
+  // On convertit donc les valeurs numériques en texte.
 
-  itoa(ldrPercent, ldrStr, 10);
+  char tempStr[10];                          // Texte température
+  char humStr[10];                           // Texte humidité
+  char pressureStr[10];                      // Texte charge en kg
+  char lvdtStr[10];                          // Texte LVDT max
 
-  client.publish("esp32/temp", tempStr);
-  client.publish("esp32/hum", humStr);
-  client.publish("esp32/LDR", ldrStr);
+  dtostrf(temperature, 1, 2, tempStr);        // Conversion température en texte
+  dtostrf(humidity, 1, 2, humStr);            // Conversion humidité en texte
+  dtostrf(pressure_kg, 1, 2, pressureStr);    // Conversion charge en texte
+  dtostrf(lvdt_max, 1, 2, lvdtStr);           // Conversion LVDT max en texte
 
-  // MEME TOPIC MQTT
-  client.publish("esp32/pressure", pressureStr);
 
-  client.publish("esp32/lvdt", lvdtStr);
+  // =====================================================
+  // PUBLICATION MQTT VERS NODE-RED
+  // =====================================================
 
-  client.publish("esp32/speed", speedStr);
+  client.publish("esp32/temp", tempStr);      // Envoyer température
+  client.publish("esp32/hum", humStr);        // Envoyer humidité
+  client.publish("esp32/pressure", pressureStr); // Envoyer charge kg
+  client.publish("esp32/lvdt", lvdtStr);      // Envoyer déplacement max
 
   Serial.println("Données envoyées via MQTT !");
 }
 
+
+// =====================================================
+// CALLBACK MQTT
+// =====================================================
+// Cette fonction reçoit les commandes envoyées par Node-RED.
+// Topic utilisé : machine/control
+// Messages possibles : start ou stop
+
 void callback(char* topic, byte* payload, unsigned int length) {
 
-  String message = "";
+  String message = "";                       // Variable pour reconstruire le message reçu
 
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
+  for (int i = 0; i < length; i++) {          // Lire chaque caractère du message
+    message += (char)payload[i];              // Ajouter le caractère au message
   }
 
   Serial.print("Message reçu : ");
   Serial.println(message);
 
-  if (String(topic) == "machine/control") {
+  if (String(topic) == "machine/control") {  // Vérifier le topic reçu
 
-    if (message == "start") {
+    if (message == "start") {                // Si Node-RED envoie start
 
-      digitalWrite(MOSFET_PIN, HIGH);
+      digitalWrite(MOSFET_PIN, HIGH);         // Démarrer la machine
 
-      dropDetected = false;
+      dropDetected = false;                   // Réinitialiser la détection de chute
 
-      previousPressure = -1;
+      previousPressure = -1;                  // Réinitialiser la charge précédente
 
-      lvdt_max = 0;
+      lvdt_max = 0;                           // Réinitialiser le maximum LVDT
     }
 
-    if (message == "stop") {
+    if (message == "stop") {                 // Si Node-RED envoie stop
 
-      digitalWrite(MOSFET_PIN, LOW);
+      digitalWrite(MOSFET_PIN, LOW);          // Arrêter la machine
     }
   }
 }
 
-// -------- SETUP --------
+
+// =====================================================
+// SETUP
+// =====================================================
+// Cette fonction s'exécute une seule fois au démarrage.
+// Elle initialise les capteurs, le Wi-Fi, MQTT et les sorties.
+
 void setup() {
 
-  Serial.begin(115200);
+  Serial.begin(115200);                      // Démarrer le moniteur série
 
-  Serial.println("Demarrage ESP32...");
->>>>>>> b253af00704d603c89ffd1dd6443fa1161c5e54d
+  Serial.println("Demarrage ESP32...");      // Message de démarrage
 
-// Push Buttons
-#define BP1_PIN 35  // Pin du bouton-poussoir 1
-#define BP2_PIN 34  // Pin du bouton-poussoir 2
+  dht.begin();                               // Initialiser le capteur DHT22
 
-<<<<<<< HEAD
-// Motor Configuration (L298N)
-#define ENA_PIN 4   // Pin ENA (vitesse du moteur)
-#define IN1_PIN 25  // Pin IN1
-#define IN2_PIN 33  // Pin IN2
 
-// PWM ESP32 
-#define PWM_CHANNEL 0
-#define PWM_FREQ 20000
-#define PWM_RESOLUTION 8
+  // =====================================================
+  // INITIALISATION I2C
+  // =====================================================
 
-int targetSpeed = 0;   // vitesse demandée par le slider
+  Wire.begin(21, 22);                        // Démarrer I2C : SDA = GPIO21, SCL = GPIO22
 
-// Variables pour gérer les vues OLED
-int currentView = 1; 
-int lastBP1State = LOW;  
-int lastBP2State = LOW;  
-bool dataSent = false;    
 
-// Timer Variables
-unsigned long lastPublishTime = 0;
-const unsigned long publishInterval = 15000; // Intervalle en millisecondes (15 secondes)
+  // =====================================================
+  // INITIALISATION LCD
+  // =====================================================
 
-// MQTT LED State
-unsigned long mqttLedOnTime = 0;
-const unsigned long mqttLedDuration = 300000; // 5 minutes en millisecondes
-bool mqttLedState = false;
+  lcd.begin(16, 2);                          // LCD 16 colonnes, 2 lignes
 
-// Variables for motor speed control
-int motorSpeed = 0; // Speed value from slider (0-255)
+  lcd.setCursor(0, 0);                       // Ligne 1
+  lcd.print("SYSTEM READY");                 // Message de démarrage
 
-// Forward declarations
-void publishData();
-void handleMoteurCommand(String command);
-void updateMqttNeopixel(String state);
+  delay(2000);                               // Afficher pendant 2 secondes
 
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("Connexion au réseau WiFi ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  lcd.clear();                               // Effacer l'écran
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    updateMqttNeopixel("waiting");
+
+  // =====================================================
+  // INITIALISATION INA228
+  // =====================================================
+
+  if (!ina228.begin()) {                     // Si l'INA228 n'est pas détecté
+
+    Serial.println("INA228 non detecte");    // Message d'erreur série
+
+    lcd.setCursor(0, 0);                     // Ligne 1 LCD
+    lcd.print("INA228 ERROR");               // Message d'erreur LCD
+
+    while (1);                               // Bloquer le programme
   }
 
-  Serial.println("");
-  Serial.println("WiFi connecté");
-}
+  Serial.println("INA228 detecte !");        // Confirmation série
 
-void reconnect() {
-  unsigned long startAttemptTime = millis();
-  while (!client.connected() && (millis() - startAttemptTime) < 10000) { // Timeout après 10s
-    updateMqttNeopixel("waiting");
-    Serial.print("Connexion au serveur MQTT...");
-    if (client.connect("ESP32Client1")) {
-      Serial.println("Connecté au broker MQTT !");
-      client.subscribe("esp32/moteur");
-      client.subscribe("esp32/speed");
-      updateMqttNeopixel("connected");
-      mqttLedState = true;
-      mqttLedOnTime = millis();
-    } else {
-      Serial.print("Erreur de connexion, code erreur: ");
-      Serial.println(client.state());
-      updateMqttNeopixel("disconnected");
-      delay(500); // Petite pause avant une nouvelle tentative
-    }
-  }
-}
+  lcd.setCursor(0, 0);                       // Ligne 1
+  lcd.print("INA228 OK");                    // Confirmation LCD
 
-void updateMqttNeopixel(String state) {
-  uint32_t color;
+  delay(1000);                               // Attendre 1 seconde
 
-  if (state == "connected") {
-    color = pixels_3.Color(0, 255, 0); // Vert
-  } else if (state == "disconnected") {
-    color = pixels_3.Color(255, 0, 0); // Rouge
-  } else if (state == "waiting") {
-    color = pixels_3.Color(128, 0, 128); // Violet
-  } else {
-    color = pixels_3.Color(0, 0, 0); // Éteint
-  }
+  lcd.clear();                               // Effacer LCD
 
-  for (int i = 0; i < NUM_PIXELS_3; i++) {
-    pixels_3.setPixelColor(i, color);
-  }
-  pixels_3.show();
-}
-void displayOledTask(void *pvParameters) {
-  for (;;) {
-    display.clearDisplay();
-    if (currentView == 1) {
-      display.setTextColor(SSD1306_WHITE);
-      display.setTextSize(1);
-      display.setCursor(30, 0);
-      display.println("Capteurs");
-      display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
-      display.setCursor(0, 15);
-      display.print("Temp: ");
-      display.print(dht.readTemperature());
-      display.print(" C");
+  // =====================================================
+  // CONFIGURATION ADC ESP32
+  // =====================================================
 
-      display.setCursor(0, 30);
-      display.print("Hum: ");
-      display.print(dht.readHumidity());
-      display.print(" %");
+  analogReadResolution(12);                  // Résolution ADC 12 bits : 0 à 4095
+  analogSetAttenuation(ADC_11db);            // Permet de lire une plage de tension plus large
 
-      display.setCursor(0, 45);
-      display.print("LDR: ");
-      display.print(ldrPercent);
-      display.print(" %");
-    } else if (currentView == 2) {
-      display.setTextColor(SSD1306_WHITE);
-      display.setTextSize(1);
-      display.setCursor(30, 0);
-      display.println("Moteur");
-      display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
-      display.setCursor(0, 20);
-      display.print("Etat: ");
-      if (digitalRead(IN1_PIN) == HIGH && digitalRead(IN2_PIN) == LOW) {
-        display.print("On");
-      } else {
-        display.print("Off");
-      }
+  // =====================================================
+  // CONNEXION WIFI ET MQTT
+  // =====================================================
 
-      display.setCursor(0, 40);
-      display.print("Vitesse: ");
-      int motorSpeedPercent = map(currentSpeed, 0, 255, 0, 100);
-      display.print(motorSpeedPercent);
-      display.print(" %");
-    }
+  setup_wifi();                              // Connexion Wi-Fi
 
-    display.display();
-    vTaskDelay(200 / portTICK_PERIOD_MS); // Délai de 200ms pour éviter le WDT
-  }
-}
+  client.setServer(mqtt_server, mqtt_port);  // Définir le broker MQTT
+  client.setCallback(callback);              // Définir la fonction appelée à la réception MQTT
 
-void updateNeopixel1(float temperature) {
-  Serial.print("Température reçue pour NeoPixel: ");
-  Serial.println(temperature);
 
-  uint32_t color;
+  // =====================================================
+  // CONFIGURATION DES BROCHES
+  // =====================================================
 
-  if (temperature < 18) {
-    color = pixels_1.Color(0, 0, 199); // Bleu
-  } else if (temperature >= 18 && temperature <= 25) {
-    color = pixels_1.Color(0, 199, 0); // Vert
-  } else if (temperature >= 26 && temperature < 30) {
-    color = pixels_1.Color(199, 165, 0); // Orange
-  } else if (temperature >= 30) {
-    color = pixels_1.Color(199, 0, 0); // Rouge
-  } else {
-    color = pixels_1.Color(0, 0, 0); // Éteint (par défaut)
-  }
+  pinMode(LED_VERTE, OUTPUT);                // LED verte en sortie
+  pinMode(LED_ROUGE, OUTPUT);                // LED rouge en sortie
 
-  for (int i = 0; i < NUM_PIXELS_1; i++) {
-    pixels_1.setPixelColor(i, color);
-  }
-  pixels_1.show();
-}
+  digitalWrite(LED_VERTE, LOW);              // LED verte éteinte au départ
+  digitalWrite(LED_ROUGE, HIGH);             // LED rouge allumée tant que MQTT n'est pas connecté
 
-void updateNeopixel2(int ldrPercentage) {
-  uint32_t color;
+  pinMode(MOSFET_PIN, OUTPUT);               // MOSFET en sortie
+  digitalWrite(MOSFET_PIN, LOW);             // Machine arrêtée au démarrage
 
-  if (ldrPercentage < 20) {
-    color = pixels_2.Color(199, 0, 0); // Rouge si LDR = 0%
-  } else {
-    color = pixels_2.Color(0, 0, 199); // Éteint si LDR > 0%
-  }
+  pinMode(LED_ALARME, OUTPUT);               // LED alarme en sortie
 
-  for (int i = 0; i < NUM_PIXELS_2; i++) {
-    pixels_2.setPixelColor(i, color); // Appliquer la couleur à chaque LED
-  }
-  pixels_2.show(); // Actualiser l'affichage des LEDs
+  pinMode(BTN_RESET, INPUT_PULLUP);          // Bouton bypass avec résistance interne pull-up
+
+  pinMode(LVDT_PIN, INPUT);                  // LVDT en entrée analogique
+
+  ledcSetup(CHANNEL, 2000, 8);               // Configurer PWM du buzzer
+  ledcAttachPin(BUZZER_PIN, CHANNEL);        // Associer le buzzer au canal PWM
 }
 
 
-
-void calibrateLDR() {
-  ldrValue = analogRead(LDR_PIN);
-  if (ldrValue < ldrMin) {
-    ldrMin = ldrValue;
-  }
-  if (ldrValue > ldrMax) {
-    ldrMax = ldrValue;
-  }
-}
-
-void computeLDRPercentage() {
-  ldrValue = analogRead(LDR_PIN); // Lire la valeur brute du LDR (0 à 4095)
-  ldrPercent = map(ldrValue, 0, 4095, 0, 100); // Mapper directement de 0 à 100%
-  ldrPercent = constrain(ldrPercent, 0, 100);  // Assurez-vous qu'elle reste entre 0 et 100%
-}
-
-void publishData() {
-  float temperature = dht.readTemperature();
-  float humidity = dht.readHumidity();
-
-  computeLDRPercentage(); // Calcule le pourcentage du LDR
-  updateNeopixel2(ldrPercent); // Mettez à jour les LEDs selon la luminosité
-  updateNeopixel1(temperature);
-  if (!isnan(temperature) && !isnan(humidity)) {
-    char tempString[8];
-    char humString[8];
-    char ldrPercentString[8];
-    dtostrf(temperature, 1, 2, tempString);
-    dtostrf(humidity, 1, 2, humString);
-    itoa(ldrPercent, ldrPercentString, 10);
-
-    client.publish("esp32/temp", tempString);
-    client.publish("esp32/hum", humString);
-    client.publish("esp32/LDR", ldrPercentString);
-
-    Serial.print("Température publiée: ");
-    Serial.println(tempString);
-    Serial.print("Humidité publiée: ");
-    Serial.println(humString);
-    Serial.print("LDR publié: ");
-    Serial.println(ldrPercentString);
-  } else {
-    Serial.println("Erreur de lecture du capteur DHT");
-  }
-}
-
-
-void callback(char* topic, byte* message, unsigned int length) {
-    String messageTemp;
-    for (int i = 0; i < length; i++) {
-        messageTemp += (char)message[i];
-    }
-
-    if (String(topic) == "esp32/moteur") {
-        if (messageTemp == "true") {
-            digitalWrite(IN1_PIN, HIGH);
-            digitalWrite(IN2_PIN, LOW);
-            currentSpeed = 128; // Démarrage à 50%
-            Serial.println("Moteur allumé à 50%");
-        } else if (messageTemp == "false") {
-            digitalWrite(IN1_PIN, LOW);
-            digitalWrite(IN2_PIN, LOW);
-            currentSpeed = 0; // Moteur arrêté
-            Serial.println("Moteur éteint");
-        }
-    } else if (String(topic) == "esp32/speed") {
-        targetSpeed = map(messageTemp.toInt(), 0, 100, 0, 255);
-        Serial.print("Vitesse demandée = ");
-        Serial.println(targetSpeed);
-      }
-
-}
-void handleButtonsTask(void *pvParameters) {
-  for (;;) {
-    int bp1State = digitalRead(BP1_PIN);
-    int bp2State = digitalRead(BP2_PIN);
-
-    if (bp1State == LOW && lastBP1State == HIGH) {
-      currentView = (currentView == 1) ? 2 : 1;
-      dataSent = false; 
-      display.clearDisplay();
-    }
-    lastBP1State = bp1State;
-
-    if (bp2State == LOW && lastBP2State == HIGH) {
-      publishData();
-      dataSent = true; 
-    }
-    lastBP2State = bp2State;
-
-    // Délai pour éviter le rebond
-    vTaskDelay(100 / portTICK_PERIOD_MS); // 100 ms
-  }
-}
-
-void setup() {
-  Serial.begin(115200);
-  dht.begin();
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("Échec initialisation OLED"));
-    for (;;);
-  }
-  display.display();
-  delay(2000);
-
-  pinMode(BP1_PIN, INPUT_PULLUP);
-  pinMode(BP2_PIN, INPUT_PULLUP);
-  pinMode(IN1_PIN, OUTPUT);  
-  pinMode(IN2_PIN, OUTPUT);
-
-  ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(ENA_PIN, PWM_CHANNEL);
-  ledcWrite(PWM_CHANNEL, 0); // moteur OFF au départ
-
-
-  Serial.println("Calibration automatique LDR en cours...");
-  unsigned long calibrationStart = millis();
-  while (millis() - calibrationStart < 5000) {
-    calibrateLDR();
-    delay(50);
-  }
-  Serial.println("Calibration LDR terminée !");
-  Serial.print("LDR Min: ");
-  Serial.println(ldrMin);
-  Serial.print("LDR Max: ");
-  Serial.println(ldrMax);
-
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-
-  pixels_1.begin();
-  pixels_1.clear();
-  pixels_1.show();
-
-  pixels_2.begin();
-  pixels_2.clear();
-  pixels_2.show();
-
-  pixels_3.begin();
-  pixels_3.clear();
-  pixels_3.show();
-
-    
-
-  xTaskCreatePinnedToCore(handleButtonsTask, "Handle Buttons", 2048, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(displayOledTask, "Display OLED", 2048, NULL, 1, NULL, 1);
-}
+// =====================================================
+// LOOP
+// =====================================================
+// Cette fonction tourne en boucle.
+// Elle gère le bypass, MQTT, les sécurités et l'envoi périodique.
 
 void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
 
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastPublishTime >= publishInterval) {
-    lastPublishTime = currentMillis;
-    publishData();
-  }
+  // =====================================================
+  // BYPASS MANUEL
+  // =====================================================
+  // Si le bouton reset/bypass est appuyé, la machine démarre
+  // manuellement, même sans commande Node-RED.
 
-  updateNeopixel2(ldrPercent);
-  computeLDRPercentage();
+  if (digitalRead(BTN_RESET) == LOW) {        // Bouton appuyé
 
-  if (mqttLedState && (millis() - mqttLedOnTime >= mqttLedDuration)) {
-    mqttLedState = false;
-    updateMqttNeopixel("off");
-  }
-  if (millis() - lastSpeedUpdate > speedUpdateInterval) {
-  lastSpeedUpdate = millis();
+    digitalWrite(MOSFET_PIN, HIGH);           // Démarrage manuel de la machine
 
-  if (currentSpeed < targetSpeed)
-    currentSpeed += speedStep;
-  else if (currentSpeed > targetSpeed)
-    currentSpeed -= speedStep;
+    ledcWriteTone(CHANNEL, 0);                // Arrêter le buzzer
 
-  currentSpeed = constrain(currentSpeed, 0, 255);
-  ledcWrite(PWM_CHANNEL, currentSpeed);
+    digitalWrite(LED_ALARME, LOW);            // Éteindre LED alarme
+
+    dropDetected = false;                     // Annuler détection de chute
+
+    previousPressure = 0;                     // Réinitialiser ancienne charge
+
+    return;                                   // Sortir de la boucle pour garder le bypass actif
   }
 
-  vTaskDelay(1); // Ajout d'une pause pour éviter le WDT
-=======
-  // I2C
-  Wire.begin(21, 22);
 
-  // ===== LCD =====
-  lcd.begin(16,2);
+  // =====================================================
+  // VERIFICATION CONNEXION MQTT
+  // =====================================================
 
-  lcd.setCursor(0,0);
-  lcd.print("SYSTEM READY");
-
-  delay(2000);
-
-  lcd.clear();
-
-  // ===== INA228 =====
-  if (!ina228.begin()) {
-
-    Serial.println("INA228 non detecte");
-
-    lcd.setCursor(0,0);
-    lcd.print("INA228 ERROR");
-
-    while (1);
+  if (!client.connected()) {                  // Si MQTT est déconnecté
+    reconnect();                              // Reconnexion automatique
   }
 
-  Serial.println("INA228 detecte !");
+  client.loop();                              // Maintenir la communication MQTT active
 
-  lcd.setCursor(0,0);
-  lcd.print("INA228 OK");
 
-  delay(1000);
+  // =====================================================
+  // ARRET APRES CHUTE DE CHARGE
+  // =====================================================
 
-  lcd.clear();
+  if (dropDetected) {                         // Si une chute de charge a été détectée
 
-  // configuration ADC ESP32
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);
-
-  setup_wifi();
-
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-
-  pinMode(LED_VERTE, OUTPUT);
-  pinMode(LED_ROUGE, OUTPUT);
-
-  digitalWrite(LED_VERTE, LOW);
-  digitalWrite(LED_ROUGE, HIGH);
-
-  pinMode(MOSFET_PIN, OUTPUT);
-  digitalWrite(MOSFET_PIN, LOW);
-
-  pinMode(LED_ALARME, OUTPUT);
-
-  pinMode(BTN_RESET, INPUT_PULLUP);
-
-  ledcSetup(CHANNEL, 2000, 8);
-  ledcAttachPin(BUZZER_PIN, CHANNEL);
-}
-
-// -------- LOOP --------
-void loop() {
-
-  // BYPASS TOTAL
-  if (digitalRead(BTN_RESET) == LOW) {
-
-    digitalWrite(MOSFET_PIN, HIGH);
-
-    ledcWriteTone(CHANNEL, 0);
-
-    digitalWrite(LED_ALARME, LOW);
-
-    dropDetected = false;
-
-    previousPressure = 0;
-
-    return;
-  }
-
-  if (!client.connected())
-    reconnect();
-
-  client.loop();
-
-  unsigned long now = millis();
-
-  if (dropDetected) {
-
-    Serial.print("Attente arret... temps écoulé = ");
+    Serial.print("Attente arret... temps ecoule = ");
     Serial.println(millis() - dropTime);
   }
 
   if (dropDetected && millis() - dropTime >= 2000) {
 
-    Serial.println("🔥🔥🔥 ARRET MACHINE 🔥🔥🔥");
+    Serial.println("ARRET MACHINE APRES CHUTE DE CHARGE");
 
-    digitalWrite(MOSFET_PIN, LOW);
+    digitalWrite(MOSFET_PIN, LOW);            // Arrêter la machine
 
-    dropDetected = false;
+    dropDetected = false;                     // Réinitialiser la détection
   }
 
-  if (now - lastPublish > interval) {
 
-    lastPublish = now;
+  // =====================================================
+  // ENVOI PERIODIQUE DES DONNEES
+  // =====================================================
 
-    publishData();
+  unsigned long now = millis();               // Temps actuel
+
+  if (now - lastPublish > interval) {         // Si l'intervalle est dépassé
+
+    lastPublish = now;                        // Mettre à jour le temps d'envoi
+
+    publishData();                            // Lire capteurs + envoyer MQTT
   }
->>>>>>> b253af00704d603c89ffd1dd6443fa1161c5e54d
 }
