@@ -1,69 +1,79 @@
 version: "3.8"
 
 services:
+
   mqtt:
     container_name: mosquitto
-    image: eclipse-mosquitto:2
-    restart: unless-stopped
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
-
-  mariadb:
-    container_name: mariadb
-    image: mariadb:11
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: emile
-      MYSQL_DATABASE: traction
-      MYSQL_USER: traction_user
-      MYSQL_PASSWORD: traction_pass
-    ports:
-      - "3306:3306"
-    volumes:
-      - mariadb_data:/var/lib/mysql
-
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin
-    container_name: phpmyadmin
+    image: eclipse-mosquitto:latest
     restart: always
     ports:
-      - "8080:80"
-    environment:
-      PMA_HOST: mariadb
-      PMA_PORT: 3306
-    depends_on:
-      - mariadb
+      - "1883:1883"
+    networks:
+      - app-network
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
 
   nodered:
     container_name: node-red
     image: nodered/node-red:latest
-    restart: unless-stopped
+    restart: always
     depends_on:
       - mqtt
       - mariadb
     ports:
       - "1880:1880"
+    networks:
+      - app-network
     volumes:
-      - nodered_data:/data
+      - node_red_user_data:/data
+
+  mariadb:
+    container_name: mariadb
+    image: mariadb:latest
+    restart: always
+    ports:
+      - "3306:3306"
+    networks:
+      - app-network
+    environment:
+      MYSQL_ROOT_PASSWORD: emile
+      MYSQL_DATABASE: db_nodered
+      MYSQL_USER: ec
+      MYSQL_PASSWORD: ec
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+  phpmyadmin:
+    container_name: phpmyadmin
+    image: phpmyadmin/phpmyadmin
+    restart: always
+    depends_on:
+      - mariadb
+    ports:
+      - "8082:80"
+    networks:
+      - app-network
+    environment:
+      PMA_HOST: mariadb
 
   grafana:
     container_name: grafana
     image: grafana/grafana:latest
-    restart: unless-stopped
+    restart: always
     depends_on:
       - mariadb
     ports:
       - "3000:3000"
+    networks:
+      - app-network
     volumes:
       - grafana_data:/var/lib/grafana
 
+networks:
+  app-network:
+    driver: bridge
+
 volumes:
-  mosquitto_data:
-  mosquitto_log:
   mariadb_data:
-  nodered_data:
+  node_red_user_data:
   grafana_data:
